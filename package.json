@@ -1,0 +1,13 @@
+{
+  "name": "agentclaim",
+  "version": "0.1.0",
+  "description": "File ownership for parallel AI agents in one git working tree. Stops them silently overwriting each other.",
+  "type": "module",
+  "bin": { "agentclaim": "bin/agentclaim.js" },
+  "files": ["bin", "src", "hooks", ".claude-plugin", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "dependencies": {},
+  "scripts": { "test": "bash test/e2e.sh" },
+  "keywords": ["claude-code", "ai-agents", "git", "hooks", "parallel", "worktree", "concurrency", "agentic"],
+  "license": "MIT"
+}
