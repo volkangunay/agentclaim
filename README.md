@@ -8,8 +8,9 @@ File ownership for parallel AI coding agents — so they stop silently overwriti
 
 [![npm](https://img.shields.io/npm/v/agentclaim?color=0b7285)](https://www.npmjs.com/package/agentclaim)
 [![node](https://img.shields.io/badge/node-%E2%89%A518-0b7285)](https://nodejs.org)
-[![dependencies](https://img.shields.io/badge/dependencies-0-0b7285)](package.json)
-[![license](https://img.shields.io/badge/license-MIT-0b7285)](LICENSE)
+[![dependencies](https://img.shields.io/badge/dependencies-0-0b7285)](https://github.com/volkangunay/agentclaim/blob/main/package.json)
+[![license](https://img.shields.io/badge/license-MIT-0b7285)](https://github.com/volkangunay/agentclaim/blob/main/LICENSE)
+[![github](https://img.shields.io/badge/source-github-0b7285)](https://github.com/volkangunay/agentclaim)
 
 ```bash
 npm i -g agentclaim && agentclaim init
@@ -409,6 +410,11 @@ it inspires trust.
 
 ---
 
+## Links
+
+- **Source & issues:** https://github.com/volkangunay/agentclaim
+- **npm:** https://www.npmjs.com/package/agentclaim
+
 ## License
 
-MIT
+MIT © Volkan Günay
