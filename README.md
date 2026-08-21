@@ -363,9 +363,12 @@ Optional `.agentclaim.json` at the repo root:
   agent's work. So the merge is stashed and written right after the tool runs, using
   only mechanics we control.
 
-- **Cost per tool call** is one short-lived node process: ~47 ms when you are working
-  alone, ~83 ms when a gate actually has to reason (measured on a 200-file repo).
-  Solo, the work is a couple of file reads and a single `git rev-parse`.
+- **Cost per tool call** is one short-lived node process: ~45 ms working alone, ~83 ms
+  when a gate actually has to reason (measured on a 200-file repo). Node startup
+  dominates — taking a snapshot after a read adds about 1 ms.
+- **Nothing to maintain.** `gc` runs on every session start and removes the claims,
+  snapshots and pending merges of sessions that are gone, so nothing accumulates in
+  `.git/`.
 
 ---
 
@@ -395,7 +398,7 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 npm test
 ```
 
-30 end-to-end checks. The suite replays all three real incidents above, proves the tool
+32 end-to-end checks. The suite replays all three real incidents above, proves the tool
 is a complete no-op for a lone session, and asserts each gate with both a passing and a
 failing example — a gate that fails to catch its own bug is worse than no gate, because
 it inspires trust.
