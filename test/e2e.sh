@@ -134,9 +134,15 @@ hook PreToolUse B "$(edit_payload "$T/shared.js" 'const a7 = 7;')" \
   && ok "B edits a different region of A's file - ALLOWED" \
   || bad "B was blocked from a non-overlapping region"
 
+# Overlapping lines are NOT a stop sign: an anchored edit still applies on top of
+# their version, so blocking here would only cost a round trip.
+OVER=$(hook_err PreToolUse B "$(edit_payload "$T/shared.js" 'const a2 = 2;')")
 hook PreToolUse B "$(edit_payload "$T/shared.js" 'const a2 = 2;')" \
-  && bad "B edited the same lines as A" \
-  || ok "B blocked only where it really collides with A"
+  && ok "B's overlapping edit is NOT blocked - the flow continues" \
+  || bad "an overlapping edit stopped the agent"
+echo "$OVER" | grep -q '// A' \
+  && ok "B is handed A's change as context instead" \
+  || bad "no context was given about A's change"
 
 # Whole-file write from B, based on the version B last saw: must be MERGED,
 # not clobbered - A's line has to survive.
@@ -168,11 +174,12 @@ sed -i.bak 's|const b3 = 3;|const b3 = 3; // by A|' conflict.js && rm -f conflic
 hook PostToolUse A "$(write_payload "$T/conflict.js")" >/dev/null 2>&1
 
 MSG=$(hook_err PreToolUse B "$(edit_payload "$T/conflict.js" 'const b3 = 3;')")
-echo "$MSG" | grep -q 'real conflict' \
-  && ok "collision is reported as a real conflict" || bad "collision was not reported"
+hook PreToolUse B "$(edit_payload "$T/conflict.js" 'const b3 = 3;')" \
+  && ok "same-line edit still runs - no pause anywhere in the edit path" \
+  || bad "the agent was stopped on a same-line edit"
 echo "$MSG" | grep -q '// by A' \
   && ok "the other agent's actual change is shown, not just a line number" \
-  || bad "conflict message did not include their change"
+  || bad "message did not include their change"
 
 # 7b. THE DEADLOCK: both A and B have touched shared.js, so neither may commit it.
 hook PreToolUse A "$(bash_payload 'git add shared.js')" \

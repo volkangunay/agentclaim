@@ -31,8 +31,18 @@ function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function allow(message) {
-  if (message) process.stderr.write(`\n${message}\n`);
+// Passing the tool through, optionally handing the model some context.
+//
+// The context travels as `hookSpecificOutput.additionalContext` — the mechanism
+// the official plugins actually use — and NOT as a non-zero exit, because an
+// exit code interrupts the agent. Context must inform the flow, not stop it.
+function allow(message, event = 'PreToolUse') {
+  if (message) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: event, additionalContext: message },
+    }));
+    process.stderr.write(`\n${message}\n`);   // also visible in hook debug output
+  }
   process.exit(0);
 }
 
@@ -98,7 +108,8 @@ export function runHook(event) {
     case 'PostToolUse': {
       // 1. Apply a merge computed before the write, so the other agent's work
       //    survives a whole-file overwrite.
-      if (tool === 'Write') applyPendingMerge(ctx, sid, input);
+      let merged = null;
+      if (tool === 'Write') merged = applyPendingMerge(ctx, sid, input);
 
       // 2. Remember what this session has now seen, so the next edit can be
       //    reasoned about region by region.
@@ -108,9 +119,11 @@ export function runHook(event) {
       const cmd = input.command || '';
       if (tool === 'Bash' && /\bgit\b[\s\S]*\bcommit\b/.test(cmd) && !isSolo(ctx)) {
         const r = verifyCommit(ctx, 'HEAD');
+        // The one case that IS worth interrupting for: a commit that shipped
+        // content nobody has on disk.
         if (r.mismatches && r.mismatches.length) feedback(verifyMessage(r.sha, r.mismatches));
       }
-      allow();
+      allow(merged, 'PostToolUse');
       break;
     }
     default:
@@ -136,18 +149,17 @@ function snapshot(ctx, sid, input) {
 function applyPendingMerge(ctx, sid, input) {
   try {
     const rel = relFor(ctx, input);
-    if (!rel) return;
+    if (!rel) return null;
     const merged = takePending(ctx.repo, sid, ctx.wt, rel);
-    if (!merged) return;
+    if (!merged) return null;
     const abs = path.join(ctx.repo.root, rel);
     fs.writeFileSync(abs, merged);
     takeSnapshot(ctx.repo, sid, ctx.wt, rel, abs);
-    feedback(
-      [
-        `agentclaim: ${rel} was merged, not overwritten.`,
-        'Another agent had edited this file; your write has been combined with',
-        'their changes. Re-read the file before continuing — it now contains both.',
-      ].join('\n')
-    );
-  } catch {}
+    return [
+      `agentclaim: ${rel} was merged, not overwritten.`,
+      'Another agent had edited this file; your write has been combined with',
+      'their changes. The file now contains both — re-read it before you rely on',
+      'its exact contents. Nothing was lost and nothing is blocked.',
+    ].join('\n');
+  } catch { return null; }
 }

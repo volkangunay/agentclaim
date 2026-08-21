@@ -90,25 +90,45 @@ Another agent had edited this file; your write has been combined with
 their changes. Re-read the file before continuing — it now contains both.
 ```
 
-### When they really do collide
+### Overlapping lines are still not a stop sign
 
-Only overlapping lines stop anything — and no tool can decide whose version is right.
-What a tool *can* do is hand over the other agent's actual change, so the blocked agent
-adapts in one step instead of guessing and coming back:
+A targeted edit is surgical: it only applies if its anchor text still exists in the file
+as it stands right now. That one property does all the work.
+
+- **anchor still there** → replacing it keeps the other agent's edits, because their
+  changes are, by definition, somewhere else in the text
+- **anchor gone** → the tool refuses on its own and the agent re-reads
+
+Either way the outcome is already correct, so blocking would cost a round trip and buy
+nothing. agentclaim adds context instead:
 
 ```
-⛔ agentclaim: real conflict in src/checkout.ts — you and another agent are editing the same lines.
+agentclaim: heads up — another agent just changed the same lines of src/checkout.ts.
   their lines: 12-19
   your lines:  14-16
 
-This is what they changed there, so you can adapt without re-reading blind:
+Your edit still applies cleanly on top of their version. This is what
+they changed, in case it affects what you were about to do:
   @@ line 12-19 @@
   -  const total = items.length
   +  const total = items.reduce((n, i) => n + i.qty, 0)
 
-Re-apply your change on top of their version, or work elsewhere until
-they are done. If you are finished in this file:  agentclaim release src/checkout.ts
+Nothing is blocked. You may not commit this file until they are done.
 ```
+
+### What actually stops an agent
+
+Four things, and only these:
+
+| Stopped | Why |
+|---------|-----|
+| A **whole-file write** that cannot be three-way merged | There is no correct automatic answer, and one of the two versions would be lost. |
+| A **whole-file write** to a file this session has never read | Nothing to merge against; it is a blind overwrite. |
+| **Staging or committing** a file another agent is actively editing | Incident #1: this is how one agent ships the other's half-finished work. |
+| A **git command we cannot parse** that touches git indirectly (`eval`, `sh -c`) while another session is live | We will not guess about `git reset --hard`. |
+
+Nothing in the edit path stops. That is the point: a tool that interrupts agents doing
+ordinary work gets switched off, and then it protects nothing.
 
 ### Commits are the strict part
 
@@ -197,7 +217,7 @@ single session -> gates inactive (no-op)
 
 | # | Gate | When | What it stops |
 |---|------|------|---------------|
-| 1 | **Write** | before `Write` / `Edit` | only a *region* another live agent is actually editing — disjoint edits pass, whole-file writes get merged |
+| 1 | **Write** | before `Write` / `Edit` | nothing in the edit path — whole-file writes get merged, and only an unmergeable one stops |
 | 2 | **Git** | before a `Bash` command | `git add -A`, `git commit -a`, `git checkout -- x`, `git reset --hard`, `git stash`, `git clean` touching files you do not own |
 | 3 | **Commit truth** | after `git commit` | the snapshot race — commit content that does not match disk |
 | 4 | **pre-commit** | on any `git commit` | staged files owned by someone else, from *any* tool |
@@ -360,11 +380,11 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 - Region coexistence needs to know what your session last saw, so it only applies to
   files the agent has read or written through its tools. A file changed by some other
   route (a shell `sed`, an external editor) is invisible to that reasoning.
-- Overlapping edits are still blocked — that is a real conflict, and no tool can decide
-  whose version is right. agentclaim shows you their change so you can adapt in one step,
-  but the decision is yours.
+- agentclaim does not understand *meaning*. Two edits can be textually independent and
+  still be semantically incoherent together; it tells you the other agent was there, but
+  the judgement is yours.
 - A clean three-way merge can still be semantically wrong, exactly as it can for humans.
-  agentclaim tells you the file was merged so you re-read before continuing.
+  agentclaim tells you the file was merged so you re-read before relying on it.
 - Claims are per-machine. Nothing is synchronised across hosts.
 
 ---
@@ -375,7 +395,7 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 npm test
 ```
 
-29 end-to-end checks. The suite replays all three real incidents above, proves the tool
+30 end-to-end checks. The suite replays all three real incidents above, proves the tool
 is a complete no-op for a lone session, and asserts each gate with both a passing and a
 failing example — a gate that fails to catch its own bug is worse than no gate, because
 it inspires trust.

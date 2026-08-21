@@ -69,7 +69,9 @@ export function isSolo(ctx) {
 // it stays symmetric: the claim holder can no more clobber a latecomer's region
 // than the other way round.
 //
-//   Edit  → does my target region overlap what changed since my snapshot?
+//   Edit  → never blocked. An anchored replacement either still matches the
+//           current file (and so preserves the other agent's work) or fails on
+//           its own. We add context, not a stop sign.
 //   Write → three-way merge (git merge-file); a clean merge is stashed and
 //           applied to the file right after the tool runs, so BOTH edits land.
 //
@@ -132,13 +134,19 @@ export function gateWrite(ctx, tool, input) {
   }
 
   const held = [claim];
+  const isWholeFile = tool === 'Write';
   const snap = snapFile(ctx.repo, ctx.sid, ctx.wt, rel);
   if (!snap) {
-    // This session has never looked at the file, so it cannot be editing around
-    // anyone. Writing here would be a blind clobber.
+    // No recorded view of this file. A targeted edit is still safe — it only
+    // applies if its anchor text is still there — so let it through with a
+    // warning. A whole-file write with no view is a blind clobber; stop that.
+    if (!isWholeFile) {
+      addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+      return { allow: true, note: `agentclaim: another agent is editing ${rel} too. Your edit will apply on top of theirs if its anchor text is still present.` };
+    }
     return ctx.cfg.mode === 'warn'
       ? { allow: true, warn: denyMessage(ctx, held, `write to ${rel}`) }
-      : deny(`${denyMessage(ctx, held, `write to ${rel}`)}\n\nRead the file first; agentclaim can then let you edit around them.`, held);
+      : deny(`${denyMessage(ctx, held, `whole-file write to ${rel}`)}\n\nRead the file first, then write it — agentclaim will merge your version with theirs.`, held);
   }
 
   const changed = changedRanges(snap, abs);
@@ -154,28 +162,39 @@ export function gateWrite(ctx, tool, input) {
   const disk = readText(abs);
   if (disk === null) return deny(denyMessage(ctx, held, `write to ${rel}`), held);   // binary
 
-  if (tool !== 'Write') {
+  // ── Targeted edits are never blocked ──────────────────────────────────────
+  //
+  // An Edit is surgical: it only applies if its anchor text still exists in the
+  // file as it stands right now. That single property does all the work for us.
+  //   - anchor still there  -> replacing it keeps the other agent's edits, because
+  //                            their changes are, by definition, elsewhere in the text
+  //   - anchor gone         -> the tool refuses on its own and the agent re-reads
+  // Either way the outcome is correct without us stopping anything, so blocking
+  // here would only cost a round trip and break the agent's flow for nothing.
+  //
+  // What IS worth doing is telling the agent that someone else is in the file,
+  // and showing what they changed where it matters — context, not a stop sign.
+  if (!isWholeFile) {
     const mine = targetRanges(tool, input, disk) || [];
-    // old_string not present: the tool will fail on its own, no need to guess.
-    if (!mine.length) return ALLOW;
+    addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+    if (!mine.length) return ALLOW;   // anchor missing; the tool will say so
     if (!anyOverlap(mine, changed)) {
-      addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
       return { allow: true, note: coexistNote(rel, mine, changed, 'your edits do not overlap theirs') };
     }
-    return deny(
-      [
-        `agentclaim: real conflict in ${rel} — you and another agent are editing the same lines.`,
+    return {
+      allow: true,
+      note: [
+        `agentclaim: heads up — another agent just changed the same lines of ${rel}.`,
         `  their lines: ${fmtRanges(changed)}`,
         `  your lines:  ${fmtRanges(mine)}`,
         '',
-        'This is what they changed there, so you can adapt without re-reading blind:',
+        'Your edit still applies cleanly on top of their version. This is what',
+        'they changed, in case it affects what you were about to do:',
         ...theirDiff(snap, abs, mine),
         '',
-        'Re-apply your change on top of their version, or work elsewhere until',
-        'they are done. If you are finished in this file:  agentclaim release ' + rel,
+        'Nothing is blocked. You may not commit this file until they are done.',
       ].join('\n'),
-      held
-    );
+    };
   }
 
   // Whole-file Write: let git decide, using what I last saw as the merge base.
