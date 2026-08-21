@@ -33,9 +33,16 @@ export function ensureStableInstall() {
   const dest = path.join(os.homedir(), '.agentclaim', 'lib');
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // The filter must test the path RELATIVE to the package root. npx's own cache
+  // path already contains "node_modules", so an absolute-path test rejects the
+  // root itself and copies nothing at all.
   fs.cpSync(PKG_ROOT, dest, {
     recursive: true,
-    filter: (src) => !/(^|[/\\])(node_modules|\.git)([/\\]|$)/.test(src),
+    filter: (src) => {
+      const rel = path.relative(PKG_ROOT, src);
+      if (!rel) return true;
+      return !rel.split(path.sep).some((seg) => seg === 'node_modules' || seg === '.git');
+    },
   });
   BIN = path.join(dest, 'bin', 'agentclaim.js');
   fs.chmodSync(BIN, 0o755);
