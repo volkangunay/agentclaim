@@ -16,6 +16,8 @@ File ownership for parallel AI coding agents — so they stop silently overwriti
 npm i -g agentclaim && agentclaim init
 ```
 
+<img src="https://raw.githubusercontent.com/volkangunay/agentclaim/main/media/agentclaim-card.png" alt="agentclaim: two agents editing one file — one edit merged, one commit blocked" width="900">
+
 </div>
 
 ---

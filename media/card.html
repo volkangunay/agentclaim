@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  :root{--bg:#0b0f14;--pan:#11161d;--brd:#1e2732;--fg:#d7e0ea;--dim:#7d8b9c;
+        --grn:#4ade80;--red:#f87171;--yel:#fbbf24;--cy:#38bdf8;--acc:#0ea5a4}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{width:1600px;height:900px;background:
+       radial-gradient(1200px 600px at 15% -10%, #16303a 0%, transparent 60%),var(--bg);
+       font-family:"SF Mono",Menlo,monospace;color:var(--fg);padding:52px 60px;display:flex;flex-direction:column}
+  .top{display:flex;align-items:baseline;gap:20px;margin-bottom:6px}
+  h1{font-size:52px;letter-spacing:-1.5px;font-weight:700}
+  .tag{font-size:23px;color:var(--acc);font-weight:600}
+  .sub{font-size:25px;color:var(--dim);margin-bottom:30px}
+  .grid{display:grid;grid-template-columns:1.06fr 1fr;gap:26px;flex:1}
+  .win{background:var(--pan);border:1px solid var(--brd);border-radius:13px;overflow:hidden;display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--brd);background:#0d1219}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .t{margin-left:10px;font-size:16px;color:var(--dim)}
+  pre{padding:19px 22px;font-size:18.5px;line-height:1.58;white-space:pre-wrap;flex:1}
+  .g{color:var(--grn)}.r{color:var(--red)}.y{color:var(--yel)}.c{color:var(--cy)}.d{color:var(--dim)}.b{font-weight:700}
+  .foot{margin-top:26px;display:flex;justify-content:space-between;align-items:center;font-size:21px;color:var(--dim)}
+  .pill{border:1px solid var(--brd);border-radius:999px;padding:8px 17px;margin-right:10px;color:var(--fg);font-size:19px}
+</style></head><body>
+  <div class="top"><h1>agentclaim</h1><div class="tag">multiple agents · one working tree</div></div>
+  <div class="sub">Stop parallel AI coding agents from silently overwriting each other.</div>
+  <div class="grid">
+    <div class="win">
+      <div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="t">agent A — refactoring checkout</div></div>
+<pre><span class="d">$</span> npm i -g agentclaim &amp;&amp; agentclaim init
+<span class="g">✓</span> Claude Code hooks wired
+<span class="g">✓</span> git pre-commit installed
+
+<span class="d"># agent B starts working in the same repo…</span>
+
+<span class="y">agentclaim:</span> src/checkout.ts is also being
+edited by another agent — <span class="b">your edits do not
+overlap theirs.</span>
+  their lines: 12-19
+  your lines:  84-91
+<span class="d">Both edits are kept. Nothing is blocked.</span>
+
+<span class="d">$</span> <span class="d"># B rewrites the whole file…</span>
+
+<span class="g b">agentclaim:</span> src/checkout.ts was
+<span class="b">merged, not overwritten.</span>
+<span class="d">Their changes and yours are both in the
+file. Nothing was lost.</span></pre>
+    </div>
+    <div class="win">
+      <div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><div class="t">agent B — about to commit</div></div>
+<pre><span class="d">$</span> git add -A &amp;&amp; git commit -m "fix"
+
+<span class="r b">⛔ agentclaim: blocked `git add -A`</span>
+   another live agent session holds:
+   <span class="c">src/checkout.ts</span> → "agent A" (6m ago)
+
+<span class="d">Ways out:</span>
+   agentclaim release src/checkout.ts
+   <span class="d">…or just wait — it clears itself</span>
+
+<span class="d">$</span> agentclaim status
+<span class="d">SESSION        FILES  AGE  LAST SEEN</span>
+<span class="c">●</span> agent B          2  4m   1s
+  agent A          3  6m   8s</pre>
+    </div>
+  </div>
+  <div class="foot">
+    <div><span class="pill">zero dependencies</span><span class="pill">no daemon</span><span class="pill">no-op when you code alone</span></div>
+    <div style="color:#8fa3b8">npm i -g agentclaim &nbsp;·&nbsp; github.com/volkangunay/agentclaim</div>
+  </div>
+</body></html>
