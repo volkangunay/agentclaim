@@ -264,17 +264,25 @@ function cmdDoctor() {
   console.log(`${ok(fs.existsSync(BIN))} executable      ${dim(BIN)}`);
   if (isEphemeral()) console.log(yellow('  ⚠ npx cache path — needs a real install (npm i -g agentclaim)'));
 
-  for (const [ad, p] of [
+  const scopes = [
     ['project hooks', path.join(c.repo.root, '.claude', 'settings.json')],
     ['global hooks ', path.join(os.homedir(), '.claude', 'settings.json')],
-  ]) {
+  ].map(([label, p]) => {
     let wired = false;
     try {
       const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
       wired = Object.values(cfg.hooks || {}).some((l) =>
         l.some((e) => (e.hooks || []).some((h) => String(h.command).includes('agentclaim'))));
     } catch {}
-    console.log(`${ok(wired)} ${ad}    ${dim(p)}`);
+    return { label, p, wired };
+  });
+  // Either scope is enough. Marking the unused one with a red x would read as a
+  // failure when nothing is actually wrong.
+  const anyWired = scopes.some((x) => x.wired);
+  for (const { label, p, wired } of scopes) {
+    const mark = wired ? green('✓') : anyWired ? dim('–') : red('✗');
+    const note = wired ? '' : dim(anyWired ? '  (not used)' : '  (not installed — run: agentclaim init)');
+    console.log(`${mark} ${label}    ${dim(p)}${note}`);
   }
 
   const hook = path.join(c.repo.commonDir, 'hooks', 'pre-commit');
@@ -283,7 +291,11 @@ function cmdDoctor() {
 
   const live = allSessions(c.repo).filter((s) => isLive(s, c.cfg));
   console.log(`\n${live.length} live session(s) · ${allClaims(c.repo).length} claim(s) · TTL ${c.cfg.ttlMinutes}m · mode ${c.cfg.mode}`);
-  console.log(isSolo(c) ? dim('single session -> gates inactive (no-op)\n') : yellow('parallel sessions -> gates enforcing\n'));
+  console.log(
+    live.length > 1
+      ? yellow('parallel sessions -> gates enforcing\n')
+      : dim('fewer than two live sessions -> gates inactive (no-op)\n')
+  );
 }
 
 try {
