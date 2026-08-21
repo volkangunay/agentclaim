@@ -33,17 +33,25 @@ export function gitSafe(args, cwd) {
 }
 
 export function findRepo(cwd = process.cwd()) {
-  const top = gitSafe(['rev-parse', '--show-toplevel'], cwd);
-  if (!top) throw new NotARepo(`not inside a git repository: ${cwd}`);
-  let common = gitSafe(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
-  if (common == null) {
-    // git < 2.31 fallback: may be relative, resolve against cwd.
+  // One git process, not two: this runs on EVERY tool call, so a spare
+  // subprocess here is latency the user feels all day.
+  let top = null;
+  let common = null;
+  const both = gitSafe(['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], cwd);
+  if (both) {
+    const lines = both.trim().split('\n');
+    if (lines.length >= 2) { [top, common] = lines; }
+  }
+  if (!top) {
+    // git < 2.31 fallback: --path-format is unsupported, and --git-common-dir
+    // may come back relative, so resolve it against cwd.
+    top = gitSafe(['rev-parse', '--show-toplevel'], cwd);
+    if (!top) throw new NotARepo(`not inside a git repository: ${cwd}`);
     const rel = gitSafe(['rev-parse', '--git-common-dir'], cwd);
     if (rel == null) throw new NotARepo(`could not read git-common-dir: ${cwd}`);
     common = path.resolve(cwd, rel.trim());
-  } else {
-    common = common.trim();
   }
+  common = common.trim();
   // realpath IS REQUIRED: on macOS /tmp and /var/folders are symlinks. git always
   // reports the RESOLVED path while an agent passes the unresolved one. Comparing
   // the two makes every path look "outside the repo" and THE GATE SILENTLY OPENS —

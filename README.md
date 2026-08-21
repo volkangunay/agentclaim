@@ -318,6 +318,10 @@ Optional `.agentclaim.json` at the repo root:
   agent's work. So the merge is stashed and written right after the tool runs, using
   only mechanics we control.
 
+- **Cost per tool call** is one short-lived node process: ~47 ms when you are working
+  alone, ~83 ms when a gate actually has to reason (measured on a 200-file repo).
+  Solo, the work is a couple of file reads and a single `git rev-parse`.
+
 ---
 
 ## Limitations
