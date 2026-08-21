@@ -1,6 +1,6 @@
 {
   "name": "agentclaim",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "File ownership for parallel AI agents in one git working tree. Stops them silently overwriting each other.",
   "author": "Volkan Günay <devdarfy@gmail.com>",
   "repository": {

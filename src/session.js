@@ -81,7 +81,15 @@ export function foreignLiveSessions(repo, cfg, sid, wt) {
   );
 }
 
+// A name a human can tell apart from the other one.
+//
+// Falling back to the agent name alone was useless in the one place this matters:
+// with two Claude Code sessions, `status` printed "claude-code" twice and you
+// could not tell which was which. Always keep something session-unique unless
+// the user gave the session a real name.
 export function labelOf(rec) {
   if (!rec) return '?';
-  return rec.label || rec.agent || String(rec.sid).slice(0, 8);
+  if (rec.label) return rec.label;
+  const short = String(rec.sid).replace(/[^A-Za-z0-9]/g, '').slice(-6) || String(rec.sid).slice(0, 6);
+  return rec.agent ? `${rec.agent}:${short}` : short;
 }

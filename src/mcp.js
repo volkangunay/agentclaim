@@ -8,6 +8,7 @@
 //
 // Transport: line-delimited JSON-RPC 2.0 over stdio. No dependencies.
 
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { context, verifyCommit } from './gates.js';
 import { resolveSid, touchSession, allSessions, isLive, labelOf, readSession } from './session.js';
@@ -16,6 +17,12 @@ import { relOf, stagedPaths } from './repo.js';
 import { age } from './format.js';
 
 const NAME = 'agentclaim';
+// Read the version rather than repeating it: a hand-synced string drifts, and a
+// server that misreports its own version is a debugging trap.
+const VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; }
+  catch { return '0.0.0'; }
+})();
 const DEFAULT_PROTOCOL = '2024-11-05';
 
 const TOOLS = [
@@ -182,7 +189,7 @@ export async function serve() {
           reply(id, {
             protocolVersion: (params && params.protocolVersion) || DEFAULT_PROTOCOL,
             capabilities: { tools: {} },
-            serverInfo: { name: NAME, version: '0.1.0' },
+            serverInfo: { name: NAME, version: VERSION },
           });
           break;
         case 'ping':

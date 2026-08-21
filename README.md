@@ -6,12 +6,13 @@
 
 File ownership for parallel AI coding agents — so they stop silently overwriting each other.
 
+[![npm](https://img.shields.io/npm/v/agentclaim?color=0b7285)](https://www.npmjs.com/package/agentclaim)
 [![node](https://img.shields.io/badge/node-%E2%89%A518-0b7285)](https://nodejs.org)
 [![dependencies](https://img.shields.io/badge/dependencies-0-0b7285)](package.json)
 [![license](https://img.shields.io/badge/license-MIT-0b7285)](LICENSE)
 
 ```bash
-npx github:volkangunay/agentclaim init
+npm i -g agentclaim && agentclaim init
 ```
 
 </div>
@@ -152,10 +153,13 @@ No server. No daemon. No dependencies. The store is a directory inside `.git/`.
 ## Quick start
 
 ```bash
-npm i -g agentclaim     # or: npx github:volkangunay/agentclaim
+npm i -g agentclaim
 cd your-repo
 agentclaim init
 ```
+
+Prefer not to install globally? `npx agentclaim init` works too — it copies itself to
+`~/.agentclaim/lib` first, because hooks must point at a path that still exists tomorrow.
 
 That is it. `init` wires up Claude Code hooks and installs a git `pre-commit` hook
 (chaining any existing one). Check it any time:
