@@ -64,19 +64,48 @@ deploy faithfully published the wrong commit.
 
 ## The fix
 
-Before an agent writes a file, it **claims** it. While a claim is live, no other
-session can write that file, stage it, commit it, or revert it.
+**Writes get smarter. Commits stay strict.**
+
+Blocking every second writer would be a stop sign, not a solution — and a tool that
+blocks work people need to do gets switched off. Two agents in one file are only in
+real conflict when they touch the same **region**.
+
+So agentclaim does not ask "who owns this file?" It asks **"what changed since I last
+looked at it?"** — the only question that separates the other agent's edits from your
+own. Different regions, both agents work. Same lines, one of them stops.
 
 ```
-⛔ agentclaim: blocked write to web/src/i18n.jsx — another live agent session holds these files:
-  web/src/i18n.jsx → "money screen" (claimed 6m ago)
-
-Work on a different file, wait for the owner to release, or take over:
-  agentclaim release web/src/i18n.jsx --force
-See what is going on:  agentclaim status
+agentclaim: src/checkout.ts is also being edited by another agent — your edits do not overlap theirs.
+  their lines: 12-19
+  your lines:  84-91
+Both edits are kept. You may not commit this file until they are done.
 ```
 
-No server. No daemon. No dependencies. The lock store is a directory inside `.git/`.
+A whole-file `Write` is not a conflict either — it gets three-way merged with the other
+agent's work using `git merge-file`, so both edits land:
+
+```
+agentclaim: src/checkout.ts was merged, not overwritten.
+Another agent had edited this file; your write has been combined with
+their changes. Re-read the file before continuing — it now contains both.
+```
+
+Only a genuine collision stops anything:
+
+```
+⛔ agentclaim: real conflict in src/checkout.ts — you and another agent are editing the same lines.
+  their lines: 12-19
+  your lines:  14-16
+
+Re-read the file to see their version, then edit around them — or work
+elsewhere until they are done.  agentclaim status
+```
+
+**Commits are the strict part.** Once two live sessions have touched a file, neither
+may stage or commit it until the other is done — because that is exactly how one agent
+ships the other's half-finished work. Incident #1 above.
+
+No server. No daemon. No dependencies. The store is a directory inside `.git/`.
 
 ---
 
@@ -148,7 +177,7 @@ single session -> gates inactive (no-op)
 
 | # | Gate | When | What it stops |
 |---|------|------|---------------|
-| 1 | **Write** | before `Write` / `Edit` | writing a file another live session holds |
+| 1 | **Write** | before `Write` / `Edit` | only a *region* another live agent is actually editing — disjoint edits pass, whole-file writes get merged |
 | 2 | **Git** | before a `Bash` command | `git add -A`, `git commit -a`, `git checkout -- x`, `git reset --hard`, `git stash`, `git clean` touching files you do not own |
 | 3 | **Commit truth** | after `git commit` | the snapshot race — commit content that does not match disk |
 | 4 | **pre-commit** | on any `git commit` | staged files owned by someone else, from *any* tool |
@@ -265,7 +294,9 @@ Optional `.agentclaim.json` at the repo root:
 ```
 .git/agentclaim/
   sessions/<id>.json   { sid, label, pid, started, seen, wt }
-  claims/<hash>.json   { path, wt, sid, at }
+  claims/<hash>.json   { path, wt, sid, at, touchers }
+  snap/<sid>/<hash>    what that session last saw on disk
+  pending/<sid>/<hash> a merge computed before a write, applied right after it
   pass.json            short-lived identity token for the git hook
 ```
 
@@ -278,6 +309,14 @@ Optional `.agentclaim.json` at the repo root:
   no race.
 - **Liveness** is TTL-based. Hooks fire on every tool call, so `seen` stays fresh
   within seconds; a crashed agent's claims are reclaimable and never wedge the repo.
+- **Region reasoning** compares your session's snapshot with the file on disk using
+  `git diff --no-index -U0`, and merges with `git merge-file`. Everything is git's own
+  semantics — the ones you already trust — with no dependency added.
+- **Merges are applied by us, not injected.** The hook output schema has an
+  `updatedInput` field, but nothing verifiable says it applies without also
+  auto-approving the call, and a wrong assumption there would silently drop the other
+  agent's work. So the merge is stashed and written right after the tool runs, using
+  only mechanics we control.
 
 ---
 
@@ -289,8 +328,13 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 - Agents without hooks or MCP are invisible **while writing**; they are caught at commit time.
 - Command parsing is deliberately not a full shell parser. For `eval` / `sh -c` /
   backticks that touch git, agentclaim refuses **only while another session is live**.
-- Two agents that genuinely must edit the same file will be blocked. Use
-  `agentclaim release`, or give them separate worktrees.
+- Region coexistence needs to know what your session last saw, so it only applies to
+  files the agent has read or written through its tools. A file changed by some other
+  route (a shell `sed`, an external editor) is invisible to that reasoning.
+- Overlapping edits are still blocked — that is a real conflict, and no tool can decide
+  whose version is right. Re-read and edit around them.
+- A clean three-way merge can still be semantically wrong, exactly as it can for humans.
+  agentclaim tells you the file was merged so you re-read before continuing.
 - Claims are per-machine. Nothing is synchronised across hosts.
 
 ---
@@ -301,9 +345,10 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 npm test
 ```
 
-The suite replays all three real incidents above and asserts each gate with both a
-passing and a failing example — a gate that fails to catch its own bug is worse than
-no gate, because it inspires trust.
+23 end-to-end checks. The suite replays all three real incidents above, proves the tool
+is a complete no-op for a lone session, and asserts each gate with both a passing and a
+failing example — a gate that fails to catch its own bug is worse than no gate, because
+it inspires trust.
 
 ---
 

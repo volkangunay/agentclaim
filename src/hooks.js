@@ -11,9 +11,13 @@
 // everything is worse than no guard at all.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { context, gateWrite, gateBash, verifyCommit, verifyMessage, isSolo } from './gates.js';
 import { touchSession, dropSession, resolveSid } from './session.js';
 import { releaseAllFor, gc } from './store.js';
+import { takeSnapshot, dropSnapshots, dropPending, takePending, cleanTmp } from './snapshot.js';
+import { relOf } from './repo.js';
+import { isIgnored } from './config.js';
 
 function readStdin() {
   const chunks = [];
@@ -27,7 +31,10 @@ function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function allow() { process.exit(0); }
+function allow(message) {
+  if (message) process.stderr.write(`\n${message}\n`);
+  process.exit(0);
+}
 
 function denyExit(message) {
   process.stderr.write(
@@ -40,12 +47,15 @@ function denyExit(message) {
   process.exit(2);
 }
 
-function warnExit(message) {
+function feedback(message) {
   process.stderr.write(`\n${message}\n`);
-  process.exit(2); // PostToolUse/warn: surface feedback to the model; the tool already ran
+  process.exit(2); // PostToolUse: the tool already ran; surface this to the model
 }
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'str_replace_editor']);
+const SEEN_TOOLS = new Set([...WRITE_TOOLS, 'Read', 'NotebookRead']);
+
+const pathOf = (input) => input.file_path || input.notebook_path || input.path;
 
 export function runHook(event) {
   let payload = {};
@@ -58,43 +68,86 @@ export function runHook(event) {
 
   try { touchSession(ctx.repo, sid, { wt: ctx.wt, cwd, agent: 'claude-code' }); } catch {}
 
+  const tool = payload.tool_name || '';
+  const input = payload.tool_input || {};
+
   switch (event) {
     case 'SessionStart': {
-      try { gc(ctx.repo, ctx.cfg); } catch {}
+      try { gc(ctx.repo, ctx.cfg); cleanTmp(ctx.repo); } catch {}
       allow();
       break;
     }
     case 'SessionEnd': {
-      try { releaseAllFor(ctx.repo, sid); dropSession(ctx.repo, sid); } catch {}
+      try {
+        releaseAllFor(ctx.repo, sid);
+        dropSnapshots(ctx.repo, sid);
+        dropPending(ctx.repo, sid);
+        dropSession(ctx.repo, sid);
+      } catch {}
       allow();
       break;
     }
     case 'PreToolUse': {
-      const tool = payload.tool_name || '';
-      const input = payload.tool_input || {};
       let d = { allow: true };
-      if (WRITE_TOOLS.has(tool)) {
-        const p = input.file_path || input.notebook_path || input.path;
-        if (p) d = gateWrite(ctx, p);
-      } else if (tool === 'Bash') {
-        d = gateBash(ctx, input.command || '');
-      }
+      if (WRITE_TOOLS.has(tool)) d = gateWrite(ctx, tool, input);
+      else if (tool === 'Bash') d = gateBash(ctx, input.command || '');
       if (!d.allow) denyExit(d.message);
-      if (d.warn) warnExit(d.warn);
-      allow();
+      allow(d.note || d.warn);
       break;
     }
     case 'PostToolUse': {
-      // Gate 3: after the commit lands, compare its content against disk.
-      const cmd = (payload.tool_input || {}).command || '';
-      if (payload.tool_name !== 'Bash' || !/\bgit\b[\s\S]*\bcommit\b/.test(cmd)) allow();
-      if (isSolo(ctx)) allow(); // a lone session cannot race with anyone
-      const r = verifyCommit(ctx, 'HEAD');
-      if (r.mismatches && r.mismatches.length) warnExit(verifyMessage(r.sha, r.mismatches));
+      // 1. Apply a merge computed before the write, so the other agent's work
+      //    survives a whole-file overwrite.
+      if (tool === 'Write') applyPendingMerge(ctx, sid, input);
+
+      // 2. Remember what this session has now seen, so the next edit can be
+      //    reasoned about region by region.
+      if (SEEN_TOOLS.has(tool)) snapshot(ctx, sid, input);
+
+      // 3. Gate 3: did the commit actually capture what is on disk?
+      const cmd = input.command || '';
+      if (tool === 'Bash' && /\bgit\b[\s\S]*\bcommit\b/.test(cmd) && !isSolo(ctx)) {
+        const r = verifyCommit(ctx, 'HEAD');
+        if (r.mismatches && r.mismatches.length) feedback(verifyMessage(r.sha, r.mismatches));
+      }
       allow();
       break;
     }
     default:
       allow();
   }
+}
+
+function relFor(ctx, input) {
+  const p = pathOf(input);
+  if (!p) return null;
+  const rel = relOf(ctx.repo, p, ctx.cwd);
+  if (!rel || isIgnored(ctx.cfg, rel)) return null;
+  return rel;
+}
+
+function snapshot(ctx, sid, input) {
+  try {
+    const rel = relFor(ctx, input);
+    if (rel) takeSnapshot(ctx.repo, sid, ctx.wt, rel, path.join(ctx.repo.root, rel));
+  } catch {}
+}
+
+function applyPendingMerge(ctx, sid, input) {
+  try {
+    const rel = relFor(ctx, input);
+    if (!rel) return;
+    const merged = takePending(ctx.repo, sid, ctx.wt, rel);
+    if (!merged) return;
+    const abs = path.join(ctx.repo.root, rel);
+    fs.writeFileSync(abs, merged);
+    takeSnapshot(ctx.repo, sid, ctx.wt, rel, abs);
+    feedback(
+      [
+        `agentclaim: ${rel} was merged, not overwritten.`,
+        'Another agent had edited this file; your write has been combined with',
+        'their changes. Re-read the file before continuing — it now contains both.',
+      ].join('\n')
+    );
+  } catch {}
 }

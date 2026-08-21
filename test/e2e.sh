@@ -22,6 +22,9 @@ hook() {
     | node "$ROOT/bin/agentclaim.js" hook "$ev" >/dev/null 2>&1
 }
 write_payload() { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$1"; }
+read_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Read","tool_input":{"file_path":"%s"}}' "$1"; }
+edit_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Edit","tool_input":{"file_path":"%s","old_string":"%s","new_string":"x"}}' "$1" "$2"; }
+wholefile_payload() { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Write","tool_input":{"file_path":"%s","content":"%s"}}' "$1" "$2"; }
 bash_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"; }
 
 rm -rf "$T"; mkdir -p "$T"; cd "$T" || exit 1
@@ -103,6 +106,48 @@ for (const f of fs.readdirSync(d)) {
 }'
 AGENTCLAIM_SESSION=B $CLI claim Money.jsx >/dev/null 2>&1 \
   && ok "stale claim was taken over" || bad "stale claim could not be taken over"
+
+# ─────────────────────────────────────────────────────────────────────────────
+head_ "6) COEXISTENCE - same file, different regions, nobody blocked"
+# Section 5 deliberately made A stale; bring it back to life for this scenario.
+AGENTCLAIM_SESSION=A $CLI status >/dev/null 2>&1
+printf 'const a1 = 1;\nconst a2 = 2;\nconst a3 = 3;\nconst a4 = 4;\nconst a5 = 5;\nconst a6 = 6;\nconst a7 = 7;\nconst a8 = 8;\n' > shared.js
+git add shared.js >/dev/null 2>&1; git commit -qm "shared" >/dev/null 2>&1
+
+# Both agents read the file, so both have a recorded view of it.
+hook PostToolUse A "$(read_payload "$T/shared.js")" >/dev/null 2>&1
+hook PostToolUse B "$(read_payload "$T/shared.js")" >/dev/null 2>&1
+
+# A edits near the top: goes through the gate, claims the file, view moves on.
+hook PreToolUse A "$(edit_payload "$T/shared.js" 'const a2 = 2;')" >/dev/null 2>&1 \
+  && ok "A takes the file first" || bad "A was blocked from an untouched file"
+sed -i.bak 's|const a2 = 2;|const a2 = 2; // A|' shared.js && rm -f shared.js.bak
+hook PostToolUse A "$(write_payload "$T/shared.js")" >/dev/null 2>&1
+
+# THE POINT: B works in the same file, just somewhere else. Not blocked.
+hook PreToolUse B "$(edit_payload "$T/shared.js" 'const a7 = 7;')" \
+  && ok "B edits a different region of A's file - ALLOWED" \
+  || bad "B was blocked from a non-overlapping region"
+
+hook PreToolUse B "$(edit_payload "$T/shared.js" 'const a2 = 2;')" \
+  && bad "B edited the same lines as A" \
+  || ok "B blocked only where it really collides with A"
+
+# Whole-file write from B, based on the version B last saw: must be MERGED,
+# not clobbered - A's line has to survive.
+NEW='const a1 = 1;\nconst a2 = 2;\nconst a3 = 3;\nconst a4 = 4;\nconst a5 = 5;\nconst a6 = 6;\nconst a7 = 777;\nconst a8 = 8;\n'
+hook PreToolUse B "$(wholefile_payload "$T/shared.js" "$NEW")" \
+  && ok "B's whole-file write accepted for merge" || bad "mergeable whole-file write was blocked"
+printf "$NEW" > shared.js                                  # the tool writes B's version
+hook PostToolUse B "$(wholefile_payload "$T/shared.js" "$NEW")" >/dev/null 2>&1 || true
+grep -q '// A' shared.js && ok "A's edit survived B's whole-file write" || bad "A's edit was lost"
+grep -q 'a7 = 777' shared.js && ok "B's edit landed too" || bad "B's edit was lost"
+
+# Writes got smarter, commits stay strict: neither may commit a contested file.
+hook PreToolUse B "$(bash_payload 'git add shared.js')" \
+  && bad "B staged a file A is still working in" || ok "commit path still strict for B"
+hook PreToolUse A "$(bash_payload 'git add shared.js')" \
+  && bad "A staged a file B is still working in" || ok "commit path still strict for A"
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

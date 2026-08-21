@@ -57,7 +57,7 @@ function entriesFor() {
   };
   return {
     PreToolUse: mk('PreToolUse', MATCH_PRE),
-    PostToolUse: mk('PostToolUse', 'Bash'),
+    PostToolUse: mk('PostToolUse', 'Read|Write|Edit|MultiEdit|NotebookEdit|Bash'),
     SessionStart: mk('SessionStart', null),
     SessionEnd: mk('SessionEnd', null),
   };

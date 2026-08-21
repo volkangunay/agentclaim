@@ -13,8 +13,10 @@ import {
   commitPaths, revParse,
 } from './repo.js';
 import { touchSession, foreignLiveSessions, readSession, labelOf } from './session.js';
-import { tryClaim, foreignHeld, readClaim, writePass } from './store.js';
+import { tryClaim, foreignHeld, readClaim, writePass, addToucher, otherLiveTouchers } from './store.js';
 import { analyze, hasIndirection, mentionsGit } from './parse-git.js';
+import { snapFile, takeSnapshot, tmpFile, writePending } from './snapshot.js';
+import { changedRanges, rangeOfString, anyOverlap, fmtRanges, mergeThreeWay, readText } from './merge.js';
 
 export const ALLOW = { allow: true };
 const deny = (message, detail) => ({ allow: false, message, detail });
@@ -55,20 +57,130 @@ export function isSolo(ctx) {
 }
 
 // ── Gate 1: writes ───────────────────────────────────────────────────────────
-export function gateWrite(ctx, filePath) {
+//
+// Blocking is a stop sign, not a solution. Two agents in one file are only in
+// real conflict when they touch the same REGION; anything else is a false
+// conflict, and a tool that blocks those gets switched off.
+//
+// So the question is never "who owns this file?" but "what changed since I last
+// looked at it?" — only that isolates the other agent's edits from my own, and
+// it stays symmetric: the claim holder can no more clobber a latecomer's region
+// than the other way round.
+//
+//   Edit  → does my target region overlap what changed since my snapshot?
+//   Write → three-way merge (git merge-file); a clean merge is stashed and
+//           applied to the file right after the tool runs, so BOTH edits land.
+//
+// Writes get smarter. Commits stay strict: once two live sessions have touched a
+// file, Gate 2 stops both of them committing it, because that is exactly how one
+// agent ships the other's half-finished work.
+function targetRanges(tool, input, disk) {
+  if (tool === 'Write') return null;                       // whole file → merge path
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits)
+    ? input.edits
+    : [{ old_string: input.old_string, replace_all: input.replace_all }];
+  const out = [];
+  for (const e of edits) {
+    if (!e || !e.old_string) continue;
+    out.push(...rangeOfString(disk, e.old_string, Boolean(e.replace_all)));
+  }
+  return out;
+}
+
+function coexistNote(rel, mine, others, how) {
+  return [
+    `agentclaim: ${rel} is also being edited by another agent — ${how}.`,
+    `  their lines: ${fmtRanges(others)}`,
+    ...(mine ? [`  your lines:  ${fmtRanges(mine)}`] : []),
+    'Both edits are kept. You may not commit this file until they are done.',
+  ].join('\n');
+}
+
+export function gateWrite(ctx, tool, input) {
   if (ctx.cfg.mode === 'off') return ALLOW;
+  const filePath = input.file_path || input.notebook_path || input.path;
+  if (!filePath) return ALLOW;
   const rel = relOf(ctx.repo, filePath, ctx.cwd);
   if (!rel) return ALLOW;                       // outside the repo — not our business
   if (isIgnored(ctx.cfg, rel)) return ALLOW;    // generated file
 
-  // Claim even when alone, so ownership is already established the moment a
-  // second session shows up.
-  const r = tryClaim(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
-  if (r.ok) return ALLOW;
-  if (isSolo(ctx)) return ALLOW;                // unreachable in practice; no-op guarantee
-  if (ctx.cfg.mode === 'warn') return { allow: true, warn: denyMessage(ctx, [r.owner], 'write') };
-  return deny(denyMessage(ctx, [r.owner], `write to ${rel}`), [r.owner]);
+  const abs = path.join(ctx.repo.root, rel);
+  const claim = readClaim(ctx.repo, ctx.wt, rel);
+  const others = otherLiveTouchers(ctx.repo, ctx.cfg, claim, ctx.sid);
+
+  // Nobody else is in this file: claim it and get out of the way.
+  if (!others.length || isSolo(ctx)) {
+    tryClaim(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+    return ALLOW;
+  }
+
+  const held = [claim];
+  const snap = snapFile(ctx.repo, ctx.sid, ctx.wt, rel);
+  if (!snap) {
+    // This session has never looked at the file, so it cannot be editing around
+    // anyone. Writing here would be a blind clobber.
+    return ctx.cfg.mode === 'warn'
+      ? { allow: true, warn: denyMessage(ctx, held, `write to ${rel}`) }
+      : deny(`${denyMessage(ctx, held, `write to ${rel}`)}\n\nRead the file first; agentclaim can then let you edit around them.`, held);
+  }
+
+  const changed = changedRanges(snap, abs);
+  if (changed === null) {
+    return deny(denyMessage(ctx, held, `write to ${rel}`), held);   // undecidable → stay safe
+  }
+  if (!changed.length) {
+    // Nothing moved since I looked: my view is current, nothing to collide with.
+    addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+    return ALLOW;
+  }
+
+  const disk = readText(abs);
+  if (disk === null) return deny(denyMessage(ctx, held, `write to ${rel}`), held);   // binary
+
+  if (tool !== 'Write') {
+    const mine = targetRanges(tool, input, disk) || [];
+    // old_string not present: the tool will fail on its own, no need to guess.
+    if (!mine.length) return ALLOW;
+    if (!anyOverlap(mine, changed)) {
+      addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+      return { allow: true, note: coexistNote(rel, mine, changed, 'your edits do not overlap theirs') };
+    }
+    return deny(
+      [
+        `agentclaim: real conflict in ${rel} — you and another agent are editing the same lines.`,
+        `  their lines: ${fmtRanges(changed)}`,
+        `  your lines:  ${fmtRanges(mine)}`,
+        '',
+        'Re-read the file to see their version, then edit around them — or work',
+        'elsewhere until they are done.  agentclaim status',
+      ].join('\n'),
+      held
+    );
+  }
+
+  // Whole-file Write: let git decide, using what I last saw as the merge base.
+  const theirs = tmpFile(ctx.repo, 'theirs', input.content ?? '');
+  const m = mergeThreeWay(abs, snap, theirs);
+  if (m.ok) {
+    addToucher(ctx.repo, ctx.cfg, { wt: ctx.wt, rel, sid: ctx.sid });
+    writePending(ctx.repo, ctx.sid, ctx.wt, rel, m.content);
+    return {
+      allow: true,
+      note: coexistNote(rel, null, changed, 'your write will be merged with theirs'),
+    };
+  }
+  return deny(
+    [
+      `agentclaim: real conflict in ${rel} — your write cannot be merged with the other agent's changes.`,
+      `  their lines: ${fmtRanges(changed)}`,
+      '',
+      'Re-read the file, then re-apply your change on top of their version.',
+    ].join('\n'),
+    held
+  );
 }
+
+export { takeSnapshot };
 
 // ── Gate 2: git commands ─────────────────────────────────────────────────────
 function expandPaths(ctx, given) {

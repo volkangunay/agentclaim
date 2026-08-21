@@ -65,7 +65,10 @@ export function ownerAlive(repo, cfg, claim) {
   * @returns {{ok: true, claim} | {ok: false, owner}}
   */
 export function tryClaim(repo, cfg, { wt, rel, sid, note }) {
-  const rec = { path: rel, wt, sid, at: Date.now(), seen: Date.now(), note: note || null };
+  const rec = {
+    path: rel, wt, sid, at: Date.now(), seen: Date.now(), note: note || null,
+    touchers: { [sid]: Date.now() },
+  };
   try {
     writeClaim(repo, rec, { exclusive: true });
     return { ok: true, claim: rec };
@@ -80,6 +83,7 @@ export function tryClaim(repo, cfg, { wt, rel, sid, note }) {
   }
   if (cur.sid === sid) {
     cur.seen = Date.now();
+    cur.touchers = { ...(cur.touchers || {}), [sid]: Date.now() };
     if (note) cur.note = note;
     writeClaim(repo, cur, { exclusive: false });
     return { ok: true, claim: cur };
@@ -123,12 +127,33 @@ export function gc(repo, cfg) {
   return { claims, sessions };
 }
 
-// Of the given paths, the ones held by ANOTHER live session.
+// Record that a session edited a file it does not own. Once two live sessions
+// have touched the same file, NEITHER may commit it until the other is done —
+// otherwise one of them commits the other's half-finished work, which is
+// incident #1 all over again. Writes get smarter; commits stay strict.
+export function addToucher(repo, cfg, { wt, rel, sid }) {
+  const cur = readClaim(repo, wt, rel);
+  if (!cur) return tryClaim(repo, cfg, { wt, rel, sid });
+  cur.touchers = { ...(cur.touchers || { [cur.sid]: cur.at }), [sid]: Date.now() };
+  cur.seen = Date.now();
+  writeClaim(repo, cur, { exclusive: false });
+  return { ok: true, claim: cur };
+}
+
+// Every live session that has touched this file, other than `sid`.
+export function otherLiveTouchers(repo, cfg, claim, sid) {
+  if (!claim) return [];
+  const ids = new Set(Object.keys(claim.touchers || {}));
+  ids.add(claim.sid);
+  return [...ids].filter((id) => id !== sid && isLive(readSession(repo, id), cfg));
+}
+
+// Of the given paths, the ones another live session has a stake in.
 export function foreignHeld(repo, cfg, { wt, sid, paths }) {
   const out = [];
   for (const rel of paths) {
     const c = readClaim(repo, wt, rel);
-    if (c && c.sid !== sid && ownerAlive(repo, cfg, c)) out.push(c);
+    if (c && otherLiveTouchers(repo, cfg, c, sid).length) out.push(c);
   }
   return out;
 }
