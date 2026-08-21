@@ -1,11 +1,17 @@
 // `agentclaim init` — wires up the hooks. Idempotent: running it twice is harmless.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const BIN = path.resolve(HERE, '..', 'bin', 'agentclaim.js');
+const PKG_ROOT = path.resolve(HERE, '..');
+
+// `let` + ESM live binding: ensureStableInstall() can repoint this and every
+// importer sees the new value. The hooks we write must reference a path that
+// still exists tomorrow.
+export let BIN = path.join(PKG_ROOT, 'bin', 'agentclaim.js');
 
 const MATCH_PRE = 'Write|Edit|MultiEdit|NotebookEdit|Bash';
 
@@ -14,8 +20,26 @@ export function hookCommand(event) {
 }
 
 // If we run from npx's throwaway cache, the path we write will not exist tomorrow.
-export function isEphemeral() {
-  return /[/\\](_npx|\.npm[/\\]_npx)[/\\]/.test(BIN);
+export function isEphemeral(p = BIN) {
+  return /[/\\](_npx|\.npm[/\\]_npx)[/\\]/.test(p);
+}
+
+// `npx github:user/agentclaim init` runs from a cache directory npm may evict.
+// Writing that path into settings.json would produce hooks that silently stop
+// working later — the exact failure mode this tool exists to prevent. So we
+// copy ourselves somewhere stable and wire the hooks to THAT copy.
+export function ensureStableInstall() {
+  if (!isEphemeral()) return { moved: false, bin: BIN };
+  const dest = path.join(os.homedir(), '.agentclaim', 'lib');
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.cpSync(PKG_ROOT, dest, {
+    recursive: true,
+    filter: (src) => !/(^|[/\\])(node_modules|\.git)([/\\]|$)/.test(src),
+  });
+  BIN = path.join(dest, 'bin', 'agentclaim.js');
+  fs.chmodSync(BIN, 0o755);
+  return { moved: true, bin: BIN, dest };
 }
 
 function entriesFor() {

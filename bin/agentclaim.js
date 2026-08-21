@@ -13,8 +13,10 @@ import {
 import { context, verifyCommit, verifyMessage, isSolo } from '../src/gates.js';
 import { runHook } from '../src/hooks.js';
 import {
-  installClaudeHooks, installGitHook, detectOtherHookManagers, BIN, isEphemeral, hookCommand,
+  installClaudeHooks, installGitHook, detectOtherHookManagers, isEphemeral,
+  ensureStableInstall, hookCommand,
 } from '../src/install.js';
+import * as installer from '../src/install.js';
 import { table, age, bold, dim, red, green, yellow, cyan } from '../src/format.js';
 
 const argv = process.argv.slice(2);
@@ -43,7 +45,7 @@ function ctx() {
 
 const HELP = `
 ${bold('agentclaim')} — file ownership for parallel AI agents
-${dim('two agents, one working tree. git will not save you.')}
+${dim('multiple agents, one working tree. git will not save you.')}
 
   ${bold('agentclaim init')} [--global]    wire up the hooks (Claude Code + git pre-commit)
   ${bold('agentclaim status')}             who holds what
@@ -63,11 +65,10 @@ Session identity: --session, else $AGENTCLAIM_SESSION, else the shell pid.
 
 function cmdInit() {
   const c = ctx();
-  if (isEphemeral()) {
-    console.log(yellow('⚠ Running from the npx cache; the path we would write is not permanent.'));
-    console.log(yellow('  Install for real first:  npm i -g agentclaim   (then: agentclaim init)'));
-    process.exit(1);
-  }
+  // Running from the npx cache? Copy ourselves somewhere permanent first, so the
+  // hook commands we are about to write keep working after npm evicts the cache.
+  const moved = ensureStableInstall();
+  if (moved.moved) console.log(`${green('✓')} installed to  ${dim(moved.dest)}`);
   const settings = flag('global')
     ? path.join(os.homedir(), '.claude', 'settings.json')
     : path.join(c.repo.root, '.claude', 'settings.json');
@@ -84,7 +85,7 @@ function cmdInit() {
   if (others.length) {
     console.log(yellow(`⚠ Another hook manager is present: ${others.join(', ')}`));
     console.log(dim('  If it also owns pre-commit, add this to its own config:'));
-    console.log(dim(`    node "${BIN}" check --staged --quiet`));
+    console.log(dim(`    node "${installer.BIN}" check --staged --quiet`));
   }
   console.log(`\n${dim('Try:')} agentclaim status`);
 }
@@ -261,8 +262,8 @@ function cmdDoctor() {
   console.log(bold('\nagentclaim doctor\n'));
   console.log(`${ok(true)} repo root       ${dim(c.repo.root)}`);
   console.log(`${ok(true)} git common dir  ${dim(c.repo.commonDir)}`);
-  console.log(`${ok(fs.existsSync(BIN))} executable      ${dim(BIN)}`);
-  if (isEphemeral()) console.log(yellow('  ⚠ npx cache path — needs a real install (npm i -g agentclaim)'));
+  console.log(`${ok(fs.existsSync(installer.BIN))} executable      ${dim(installer.BIN)}`);
+  if (isEphemeral()) console.log(yellow('  ⚠ running from the npx cache — run `agentclaim init` to install permanently'));
 
   const scopes = [
     ['project hooks', path.join(c.repo.root, '.claude', 'settings.json')],

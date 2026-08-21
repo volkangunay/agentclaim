@@ -2,17 +2,16 @@
 
 # agentclaim
 
-**Two agents. One working tree. Git won't save you.**
+**Multiple agents. One working tree. Git won't save you.**
 
 File ownership for parallel AI coding agents — so they stop silently overwriting each other.
 
-[![npm](https://img.shields.io/npm/v/agentclaim?color=0b7285)](https://www.npmjs.com/package/agentclaim)
 [![node](https://img.shields.io/badge/node-%E2%89%A518-0b7285)](https://nodejs.org)
 [![dependencies](https://img.shields.io/badge/dependencies-0-0b7285)](package.json)
 [![license](https://img.shields.io/badge/license-MIT-0b7285)](LICENSE)
 
 ```bash
-npm i -g agentclaim && agentclaim init
+npx github:volkangunay/agentclaim init
 ```
 
 </div>
@@ -21,7 +20,7 @@ npm i -g agentclaim && agentclaim init
 
 ## The problem
 
-You now run two, three, five coding agents at once. They share **one working tree**.
+You run two, three, five coding agents at once. They share **one working tree**.
 
 Git was built for people on separate clones merging later. It has no idea what to do
 with two writers editing the same checkout at the same second. There is no conflict
@@ -84,7 +83,7 @@ No server. No daemon. No dependencies. The lock store is a directory inside `.gi
 ## Quick start
 
 ```bash
-npm i -g agentclaim
+npm i -g agentclaim     # or: npx github:volkangunay/agentclaim
 cd your-repo
 agentclaim init
 ```
@@ -109,6 +108,21 @@ Give your session a readable name so the other agent's error message means somet
 ```bash
 agentclaim label "money screen"
 ```
+
+---
+
+## What `init` changes on your machine
+
+Three things. Nothing else.
+
+| What | Where | Undo |
+|------|-------|------|
+| Hook entries | `.claude/settings.json` (backed up first) | `agentclaim uninstall` |
+| A `pre-commit` hook | `.git/hooks/` (an existing hook is chained, never replaced) | `agentclaim uninstall` |
+| The claim store | `.git/agentclaim/` — inside `.git`, never committed | delete the directory |
+
+No network calls. No telemetry. No background process. Not a single line of your
+code is touched, and nothing new appears in `git status`.
 
 ---
 
