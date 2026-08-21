@@ -55,6 +55,34 @@ export function rangeOfString(content, needle, all = false) {
   return ranges;
 }
 
+// The same diff, but keeping each hunk's text so we can show an agent what the
+// other one actually wrote. Telling someone "line 14 conflicts" makes them guess;
+// showing them the other version lets them adapt in one step.
+export function changedHunks(baseFile, curFile) {
+  let out = '';
+  try {
+    out = execFileSync('git', ['diff', '--no-index', '--unified=1', '--', baseFile, curFile], {
+      encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch (e) {
+    out = e.stdout ? e.stdout.toString() : '';
+  }
+  const hunks = [];
+  let cur = null;
+  for (const line of out.split('\n')) {
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (m) {
+      const start = Number(m[1]);
+      const count = m[2] === undefined ? 1 : Number(m[2]);
+      cur = { start, end: count === 0 ? start + 1 : start + count - 1, lines: [] };
+      hunks.push(cur);
+      continue;
+    }
+    if (cur && /^[-+ ]/.test(line)) cur.lines.push(line);
+  }
+  return hunks;
+}
+
 export function overlaps(a, b) {
   return a.start <= b.end && b.start <= a.end;
 }

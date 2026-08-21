@@ -24,6 +24,11 @@ hook() {
 write_payload() { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$1"; }
 read_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Read","tool_input":{"file_path":"%s"}}' "$1"; }
 edit_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Edit","tool_input":{"file_path":"%s","old_string":"%s","new_string":"x"}}' "$1" "$2"; }
+hook_err() {
+  local ev="$1" sid="$2" payload="$3"
+  printf '%s' "$payload" | sed "s|__SID__|$sid|; s|__CWD__|$T|" \
+    | node "$ROOT/bin/agentclaim.js" hook "$ev" 2>&1 >/dev/null
+}
 wholefile_payload() { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Write","tool_input":{"file_path":"%s","content":"%s"}}' "$1" "$2"; }
 bash_payload()  { printf '{"session_id":"__SID__","cwd":"__CWD__","tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"; }
 
@@ -148,6 +153,55 @@ hook PreToolUse B "$(bash_payload 'git add shared.js')" \
   && bad "B staged a file A is still working in" || ok "commit path still strict for B"
 hook PreToolUse A "$(bash_payload 'git add shared.js')" \
   && bad "A staged a file B is still working in" || ok "commit path still strict for A"
+
+# ─────────────────────────────────────────────────────────────────────────────
+head_ "7) GETTING UNSTUCK - a real conflict, and the way out of a contested file"
+
+# 7a. A true collision must hand over the other agent's actual change, not just
+#     say "conflict". Guessing costs a round trip; seeing it does not.
+printf 'const b1 = 1;\nconst b2 = 2;\nconst b3 = 3;\nconst b4 = 4;\n' > conflict.js
+git add conflict.js >/dev/null 2>&1; git commit -qm "conflict file" >/dev/null 2>&1
+hook PostToolUse A "$(read_payload "$T/conflict.js")" >/dev/null 2>&1
+hook PostToolUse B "$(read_payload "$T/conflict.js")" >/dev/null 2>&1
+hook PreToolUse A "$(edit_payload "$T/conflict.js" 'const b3 = 3;')" >/dev/null 2>&1
+sed -i.bak 's|const b3 = 3;|const b3 = 3; // by A|' conflict.js && rm -f conflict.js.bak
+hook PostToolUse A "$(write_payload "$T/conflict.js")" >/dev/null 2>&1
+
+MSG=$(hook_err PreToolUse B "$(edit_payload "$T/conflict.js" 'const b3 = 3;')")
+echo "$MSG" | grep -q 'real conflict' \
+  && ok "collision is reported as a real conflict" || bad "collision was not reported"
+echo "$MSG" | grep -q '// by A' \
+  && ok "the other agent's actual change is shown, not just a line number" \
+  || bad "conflict message did not include their change"
+
+# 7b. THE DEADLOCK: both A and B have touched shared.js, so neither may commit it.
+hook PreToolUse A "$(bash_payload 'git add shared.js')" \
+  && bad "contested file was stageable" || ok "deadlock reproduced: A cannot stage"
+# The cooperative exit: B says it is done. No --force, and it cannot steal.
+AGENTCLAIM_SESSION=B $CLI release shared.js >/dev/null 2>&1
+hook PreToolUse A "$(bash_payload 'git add shared.js')" \
+  && ok "after B steps out, A can stage again" || bad "A is still stuck after B released"
+
+# 7c. Nobody has to say anything: a session stops blocking a file it has not
+#     touched recently, so the deadlock also resolves on its own.
+hook PostToolUse B "$(read_payload "$T/shared.js")" >/dev/null 2>&1
+hook PreToolUse B "$(edit_payload "$T/shared.js" 'const a5 = 5;')" >/dev/null 2>&1
+hook PreToolUse A "$(bash_payload 'git add shared.js')" \
+  && bad "B's fresh edit did not block A" || ok "B re-entering the file blocks A again"
+node -e '
+const fs=require("fs"),p=require("path");
+const d=p.join(process.cwd(),".git","agentclaim","claims");
+const old=Date.now()-99*60*1000;
+for (const f of fs.readdirSync(d)) {
+  const q=p.join(d,f), c=JSON.parse(fs.readFileSync(q,"utf8"));
+  if (!c.path.endsWith("shared.js")) continue;
+  for (const k of Object.keys(c.touchers||{})) if (k==="B") c.touchers[k]=old;
+  if (c.sid==="B") c.at=old;
+  fs.writeFileSync(q, JSON.stringify(c));
+}'
+hook PreToolUse A "$(bash_payload 'git add shared.js')" \
+  && ok "an idle session stops blocking the commit on its own" \
+  || bad "idle session still blocks the commit"
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

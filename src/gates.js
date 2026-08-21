@@ -16,7 +16,7 @@ import { touchSession, foreignLiveSessions, readSession, labelOf } from './sessi
 import { tryClaim, foreignHeld, readClaim, writePass, addToucher, otherLiveTouchers } from './store.js';
 import { analyze, hasIndirection, mentionsGit } from './parse-git.js';
 import { snapFile, takeSnapshot, tmpFile, writePending } from './snapshot.js';
-import { changedRanges, rangeOfString, anyOverlap, fmtRanges, mergeThreeWay, readText } from './merge.js';
+import { changedRanges, changedHunks, rangeOfString, anyOverlap, overlaps, fmtRanges, mergeThreeWay, readText } from './merge.js';
 
 export const ALLOW = { allow: true };
 const deny = (message, detail) => ({ allow: false, message, detail });
@@ -46,8 +46,10 @@ function denyMessage(ctx, held, what) {
     `agentclaim: blocked ${what} — another live agent session holds these files:`,
     ...lines,
     '',
-    'Work on a different file, wait for the owner to release, or take over:',
-    `  agentclaim release ${held[0].path} --force`,
+    'Ways out, in order of preference:',
+    `  agentclaim release ${held[0].path}   # "I am done here" — frees it for them`,
+    '  …or wait: a session stops blocking a file it has not edited recently',
+    `  agentclaim release ${held[0].path} --force   # take it over outright`,
     'See what is going on:  agentclaim status',
   ].join('\n');
 }
@@ -85,6 +87,21 @@ function targetRanges(tool, input, disk) {
     out.push(...rangeOfString(disk, e.old_string, Boolean(e.replace_all)));
   }
   return out;
+}
+
+// The other agent's actual edit, limited to the region we collide in.
+function theirDiff(snapFilePath, absPath, mineRanges, maxLines = 24) {
+  const hunks = changedHunks(snapFilePath, absPath)
+    .filter((h) => mineRanges.some((m) => overlaps(m, h)));
+  const out = [];
+  for (const h of hunks) {
+    out.push(`  @@ line ${h.start}${h.end !== h.start ? `-${h.end}` : ''} @@`);
+    for (const l of h.lines) {
+      if (out.length >= maxLines) { out.push('  … (truncated)'); return out; }
+      out.push(`  ${l}`);
+    }
+  }
+  return out.length ? out : ['  (their change could not be extracted)'];
 }
 
 function coexistNote(rel, mine, others, how) {
@@ -151,8 +168,11 @@ export function gateWrite(ctx, tool, input) {
         `  their lines: ${fmtRanges(changed)}`,
         `  your lines:  ${fmtRanges(mine)}`,
         '',
-        'Re-read the file to see their version, then edit around them — or work',
-        'elsewhere until they are done.  agentclaim status',
+        'This is what they changed there, so you can adapt without re-reading blind:',
+        ...theirDiff(snap, abs, mine),
+        '',
+        'Re-apply your change on top of their version, or work elsewhere until',
+        'they are done. If you are finished in this file:  agentclaim release ' + rel,
       ].join('\n'),
       held
     );

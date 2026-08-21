@@ -104,7 +104,11 @@ export function releaseClaim(repo, wt, rel) {
 export function releaseAllFor(repo, sid) {
   let n = 0;
   for (const c of allClaims(repo)) {
-    if (c.sid === sid && releaseClaim(repo, c.wt, c.path)) n++;
+    const isOwner = c.sid === sid;
+    const isToucher = Boolean((c.touchers || {})[sid]);
+    if (!isOwner && !isToucher) continue;
+    stepOut(repo, c.wt, c.path, sid);   // never destroys anyone else's stake
+    n++;
   }
   return n;
 }
@@ -141,6 +145,9 @@ export function addToucher(repo, cfg, { wt, rel, sid }) {
 }
 
 // Every live session that has touched this file, other than `sid`.
+//
+// Used by the WRITE gate, with no recency window: as long as another agent has
+// a stake in the file at all, we route around its work rather than over it.
 export function otherLiveTouchers(repo, cfg, claim, sid) {
   if (!claim) return [];
   const ids = new Set(Object.keys(claim.touchers || {}));
@@ -148,12 +155,49 @@ export function otherLiveTouchers(repo, cfg, claim, sid) {
   return [...ids].filter((id) => id !== sid && isLive(readSession(repo, id), cfg));
 }
 
+// Those still ACTIVELY working in this file — touched within touchTtlMinutes.
+//
+// Used by the COMMIT gate. A session that has moved on should not keep the file
+// hostage: agents run for hours, but nobody edits one file for hours. This is
+// what makes "neither of us can commit" resolve on its own instead of waiting
+// for someone to exit.
+export function activeOtherTouchers(repo, cfg, claim, sid) {
+  if (!claim) return [];
+  const win = (cfg.touchTtlMinutes ?? 10) * 60 * 1000;
+  const now = Date.now();
+  const t = claim.touchers || { [claim.sid]: claim.at };
+  return otherLiveTouchers(repo, cfg, claim, sid).filter((id) => {
+    const at = t[id] ?? (id === claim.sid ? claim.at : 0);
+    return now - at <= win;
+  });
+}
+
+// Step out of a file: "I am done here." Removes this session's stake without
+// destroying anyone else's, and hands ownership on if we were holding it.
+// This is the cooperative exit from a contested file — no --force needed.
+export function stepOut(repo, wt, rel, sid) {
+  const cur = readClaim(repo, wt, rel);
+  if (!cur) return { ok: true, gone: true };
+  const t = { ...(cur.touchers || { [cur.sid]: cur.at }) };
+  delete t[sid];
+  const rest = Object.keys(t);
+  if (!rest.length) { releaseClaim(repo, wt, rel); return { ok: true, gone: true }; }
+  if (cur.sid === sid) {
+    // Hand the file to whoever has been in it longest of those remaining.
+    cur.sid = rest.sort((a, b) => t[a] - t[b])[0];
+    cur.at = t[cur.sid];
+  }
+  cur.touchers = t;
+  writeClaim(repo, cur, { exclusive: false });
+  return { ok: true, gone: false, newOwner: cur.sid };
+}
+
 // Of the given paths, the ones another live session has a stake in.
 export function foreignHeld(repo, cfg, { wt, sid, paths }) {
   const out = [];
   for (const rel of paths) {
     const c = readClaim(repo, wt, rel);
-    if (c && otherLiveTouchers(repo, cfg, c, sid).length) out.push(c);
+    if (c && activeOtherTouchers(repo, cfg, c, sid).length) out.push(c);
   }
   return out;
 }

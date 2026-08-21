@@ -90,20 +90,40 @@ Another agent had edited this file; your write has been combined with
 their changes. Re-read the file before continuing — it now contains both.
 ```
 
-Only a genuine collision stops anything:
+### When they really do collide
+
+Only overlapping lines stop anything — and no tool can decide whose version is right.
+What a tool *can* do is hand over the other agent's actual change, so the blocked agent
+adapts in one step instead of guessing and coming back:
 
 ```
 ⛔ agentclaim: real conflict in src/checkout.ts — you and another agent are editing the same lines.
   their lines: 12-19
   your lines:  14-16
 
-Re-read the file to see their version, then edit around them — or work
-elsewhere until they are done.  agentclaim status
+This is what they changed there, so you can adapt without re-reading blind:
+  @@ line 12-19 @@
+  -  const total = items.length
+  +  const total = items.reduce((n, i) => n + i.qty, 0)
+
+Re-apply your change on top of their version, or work elsewhere until
+they are done. If you are finished in this file:  agentclaim release src/checkout.ts
 ```
 
-**Commits are the strict part.** Once two live sessions have touched a file, neither
-may stage or commit it until the other is done — because that is exactly how one agent
-ships the other's half-finished work. Incident #1 above.
+### Commits are the strict part
+
+Once two live sessions have touched a file, neither may stage or commit it — because
+that is exactly how one agent ships the other's half-finished work. Incident #1 above.
+
+That protection would be a deadlock if it had no exit, so it has three:
+
+| Exit | What it does |
+|------|--------------|
+| `agentclaim release <path>` | "I am done here." Drops only *your* stake, needs no `--force`, and cannot be used to steal a file. The other agent can commit immediately. |
+| do nothing | A session stops blocking a file it has not edited for `touchTtlMinutes` (default 10). Agents run for hours; nobody edits one file for hours. |
+| `agentclaim release <path> --force` | Take it over outright. The blunt instrument, still there when you need it. |
+
+Sessions ending or crashing release everything they held, so the tree never stays locked.
 
 No server. No daemon. No dependencies. The store is a directory inside `.git/`.
 
@@ -256,7 +276,7 @@ agentclaim init [--global]    wire up the hooks (Claude Code + git pre-commit)
 agentclaim status             who holds what
 agentclaim who <path>         owner of a single file
 agentclaim claim <path...>    claim files            [--note "..."]
-agentclaim release <path...>  release files          [--all] [--force]
+agentclaim release <path...>  "I am done here"       [--all] [--force to take over]
 agentclaim check <path...>    gate for scripts, exit 0/1  [--staged] [--quiet]
 agentclaim verify [rev]       compare commit content against disk  [--all]
 agentclaim label "<name>"     give this session a readable name
@@ -275,6 +295,7 @@ Optional `.agentclaim.json` at the repo root:
 ```json
 {
   "ttlMinutes": 30,
+  "touchTtlMinutes": 10,
   "mode": "block",
   "ignore": ["node_modules/**", "dist/**", "*.lock", "package-lock.json"]
 }
@@ -283,6 +304,10 @@ Optional `.agentclaim.json` at the repo root:
 - **`ttlMinutes`** — a session with no activity for this long is considered gone and
   its claims can be taken over. Every hook invocation refreshes the heartbeat, so an
   active session never expires.
+- **`touchTtlMinutes`** — how long a session keeps blocking *others* from committing a
+  file after its last edit there. Shorter than `ttlMinutes` on purpose: still being
+  alive is not the same as still working in this file, and conflating the two is what
+  turns protection into deadlock.
 - **`mode`** — `block` (default), `warn` (report but allow), `off`.
 - **`ignore`** — never claimed. Keep generated files here; if lockfiles and build
   output get claimed, the gate fires constantly and people start bypassing it.
@@ -336,7 +361,8 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
   files the agent has read or written through its tools. A file changed by some other
   route (a shell `sed`, an external editor) is invisible to that reasoning.
 - Overlapping edits are still blocked — that is a real conflict, and no tool can decide
-  whose version is right. Re-read and edit around them.
+  whose version is right. agentclaim shows you their change so you can adapt in one step,
+  but the decision is yours.
 - A clean three-way merge can still be semantically wrong, exactly as it can for humans.
   agentclaim tells you the file was merged so you re-read before continuing.
 - Claims are per-machine. Nothing is synchronised across hosts.
@@ -349,7 +375,7 @@ Stated plainly, because a guard you trust wrongly is worse than no guard.
 npm test
 ```
 
-23 end-to-end checks. The suite replays all three real incidents above, proves the tool
+29 end-to-end checks. The suite replays all three real incidents above, proves the tool
 is a complete no-op for a lone session, and asserts each gate with both a passing and a
 failing example — a gate that fails to catch its own bug is worse than no gate, because
 it inspires trust.

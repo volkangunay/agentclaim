@@ -9,6 +9,7 @@ import {
 } from '../src/session.js';
 import {
   allClaims, tryClaim, releaseClaim, releaseAllFor, gc, foreignHeld, readClaim, readPass,
+  stepOut, activeOtherTouchers,
 } from '../src/store.js';
 import { context, verifyCommit, verifyMessage, isSolo } from '../src/gates.js';
 import { runHook } from '../src/hooks.js';
@@ -192,7 +193,7 @@ function cmdRelease() {
   const c = ctx();
   if (flag('all')) {
     const n = releaseAllFor(c.repo, opt('session') || c.sid);
-    console.log(`${green('✓')} released ${n} file(s)`);
+    console.log(`${green('✓')} stepped out of ${n} file(s)`);
     return;
   }
   const ps = positionals();
@@ -202,11 +203,17 @@ function cmdRelease() {
     if (!rel) continue;
     const k = readClaim(c.repo, c.wt, rel);
     if (!k) { console.log(dim(`${rel} — already unclaimed`)); continue; }
-    if (k.sid !== c.sid && !flag('force')) {
-      die(`${rel} is not yours (held by: ${labelOf(readSession(c.repo, k.sid))}). Use --force to take it over.`);
+    if (flag('force')) {
+      // Take it over outright: drops everyone's stake, including theirs.
+      releaseClaim(c.repo, c.wt, rel);
+      console.log(`${green('✓')} took over ${rel}`);
+      continue;
     }
-    releaseClaim(c.repo, c.wt, rel);
-    console.log(`${green('✓')} released ${rel}`);
+    // Default is "I am done here" — it never destroys another session's stake,
+    // so it needs no --force and cannot be used to steal a file.
+    const r = stepOut(c.repo, c.wt, rel, c.sid);
+    if (r.gone) console.log(`${green('✓')} released ${rel}`);
+    else console.log(`${green('✓')} stepped out of ${rel} ${dim(`(now with ${labelOf(readSession(c.repo, r.newOwner))})`)}`);
   }
 }
 

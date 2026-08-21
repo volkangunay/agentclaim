@@ -9,6 +9,11 @@ import path from 'node:path';
 
 export const DEFAULTS = {
   ttlMinutes: 30,
+  // How long a session keeps blocking OTHERS from committing a file after its
+  // last edit there. Sessions live for hours; "actively working in this file"
+  // does not. Without this, two agents that both touched one file would block
+  // each other until one of them exits — a deadlock with no way out.
+  touchTtlMinutes: 10,
   mode: 'block', // 'block' | 'warn' | 'off'
   ignore: [
     'node_modules/**', 'dist/**', 'build/**', '.next/**', 'coverage/**',
