@@ -260,7 +260,7 @@ function cmdLabel() {
 function cmdGc() {
   const c = ctx();
   const r = gc(c.repo, c.cfg);
-  console.log(`${green('✓')} collected ${r.claims} stale claim(s), ${r.sessions} stale session(s)`);
+  console.log(`${green('✓')} collected ${r.claims} stale claim(s), ${r.sessions} stale session(s), ${r.files} leftover file(s)`);
 }
 
 function cmdDoctor() {

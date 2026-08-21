@@ -113,22 +113,50 @@ export function releaseAllFor(repo, sid) {
   return n;
 }
 
-// Collect claims whose owner is gone, plus stale session records.
+// Collect claims whose owner is gone, plus stale session records, plus the
+// per-session working data those sessions left behind.
+//
+// The last part matters: snapshots and pending merges are keyed by session, and
+// sessions are disposable. Cleaning claims but not their snapshots would grow
+// .git/ without bound in any repo that is actually used — a tool that promises
+// no maintenance must not need maintenance.
 export function gc(repo, cfg) {
-  let claims = 0, sessions = 0;
+  let claims = 0, sessions = 0, files = 0;
   for (const c of allClaims(repo)) {
     if (!ownerAlive(repo, cfg, c) && releaseClaim(repo, c.wt, c.path)) claims++;
   }
+
+  const liveSids = new Set();
   let names = [];
   try { names = fs.readdirSync(path.join(repo.store, 'sessions')); } catch {}
   for (const n of names) {
     const f = path.join(repo.store, 'sessions', n);
     try {
       const s = JSON.parse(fs.readFileSync(f, 'utf8'));
-      if (!isLive(s, cfg)) { fs.unlinkSync(f); sessions++; }
+      if (isLive(s, cfg)) { liveSids.add(s.sid); continue; }
+      fs.unlinkSync(f); sessions++;
     } catch { try { fs.unlinkSync(f); sessions++; } catch {} }
   }
-  return { claims, sessions };
+
+  // snap/ and pending/ are named by base64url(sid); drop any that no live
+  // session answers for.
+  for (const kind of ['snap', 'pending']) {
+    const base = path.join(repo.store, kind);
+    let dirs = [];
+    try { dirs = fs.readdirSync(base); } catch { continue; }
+    for (const d of dirs) {
+      let sid = null;
+      try { sid = Buffer.from(d, 'base64url').toString('utf8'); } catch {}
+      if (sid && liveSids.has(sid)) continue;
+      try {
+        files += fs.readdirSync(path.join(base, d)).length;
+        fs.rmSync(path.join(base, d), { recursive: true, force: true });
+      } catch {}
+    }
+  }
+  try { fs.rmSync(path.join(repo.store, 'tmp'), { recursive: true, force: true }); } catch {}
+
+  return { claims, sessions, files };
 }
 
 // Record that a session edited a file it does not own. Once two live sessions

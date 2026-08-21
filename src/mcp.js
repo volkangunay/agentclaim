@@ -9,7 +9,7 @@
 // Transport: line-delimited JSON-RPC 2.0 over stdio. No dependencies.
 
 import readline from 'node:readline';
-import { context, gateWrite, verifyCommit } from './gates.js';
+import { context, verifyCommit } from './gates.js';
 import { resolveSid, touchSession, allSessions, isLive, labelOf, readSession } from './session.js';
 import { allClaims, tryClaim, releaseClaim, releaseAllFor, readClaim, foreignHeld } from './store.js';
 import { relOf, stagedPaths } from './repo.js';

@@ -211,6 +211,22 @@ hook PreToolUse A "$(bash_payload 'git add shared.js')" \
   || bad "idle session still blocks the commit"
 
 # ─────────────────────────────────────────────────────────────────────────────
+head_ "8) NO MAINTENANCE - gc leaves nothing of dead sessions behind"
+hook PostToolUse GHOST "$(read_payload "$T/shared.js")" >/dev/null 2>&1
+hook PostToolUse GHOST "$(read_payload "$T/conflict.js")" >/dev/null 2>&1
+[ -n "$(find .git/agentclaim/snap -type f 2>/dev/null)" ] \
+  && ok "snapshots are written per session" || bad "no snapshots were written"
+node -e '
+const fs=require("fs"),p=require("path");const d=".git/agentclaim/sessions";
+for(const f of fs.readdirSync(d)){const q=p.join(d,f);const s=JSON.parse(fs.readFileSync(q,"utf8"));
+ s.seen=Date.now()-99*60*1000;fs.writeFileSync(q,JSON.stringify(s));}'
+$CLI gc >/dev/null 2>&1
+LEFT=$(find .git/agentclaim/snap .git/agentclaim/pending .git/agentclaim/tmp -type f 2>/dev/null | wc -l | tr -d ' ')
+[ "$LEFT" = "0" ] \
+  && ok "dead sessions leave no snapshots, pending merges or temp files" \
+  || bad "gc leaked $LEFT file(s) inside .git"
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 cd /; rm -rf "$T"
 [ "$FAIL" -eq 0 ]
